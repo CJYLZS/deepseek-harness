@@ -23,7 +23,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   LAUNCHER_BIN,
@@ -62,6 +62,17 @@ export interface Config {
   runnerFailureSignatures?: string[]
   /** Positive timeout for each functional probe; zero would mean unbounded to Node. */
   probeTimeoutMs?: number
+  /**
+   * Device nodes to bind into confined bwrap profiles (e.g. `/dev/dxg`, the
+   * paravirtualized dxgkrnl GPU device on WSL2 — CUDA/NVML reach the GPU
+   * through it; WSL2 has no `/dev/nvidia*` nodes). Each node is bind-mounted
+   * only when it exists on the host, so one list can serve heterogeneous
+   * hosts (bare-metal `/dev/nvidia*` vs WSL2 `/dev/dxg`). Empty by default:
+   * exposing a GPU to confined commands is a deliberate deployment decision,
+   * not a file effect of either sandbox mode. Entries must be non-empty
+   * absolute paths; duplicates are collapsed.
+   */
+  gpuDeviceNodes?: string[]
 }
 
 /** Probe whether `bwrap` can create the profile; the provider caches the bounded result. */
@@ -253,6 +264,7 @@ export class LocalSandboxProvider extends SandboxProvider {
     runnerCommand: z.array(z.string()).default([]),
     runnerFailureSignatures: z.array(z.string()).default([]),
     probeTimeoutMs: z.natural().default(5_000),
+    gpuDeviceNodes: z.array(z.string()).default([]),
   })
 
   /** Test hook (mirrors the bash executors' `internals`). */
@@ -261,6 +273,8 @@ export class LocalSandboxProvider extends SandboxProvider {
   private readonly runnerCommand: string[] | undefined
   private readonly configuredRunnerFailureSignatures: string[]
   private readonly probeTimeoutMs: number
+  /** Device nodes to bind into bwrap profiles when present on the host (validated, deduplicated). */
+  private readonly gpuDeviceNodes: readonly string[]
   /** Cached chain verdict; undefined until the first confined wrap needs it. */
   private selectedRunner: SelectedRunner | 'unavailable' | undefined
   /**
@@ -293,6 +307,13 @@ export class LocalSandboxProvider extends SandboxProvider {
     this.configuredRunnerFailureSignatures = runnerFailureSignatures
     this.probeTimeoutMs = config.probeTimeoutMs as number
     assertPositiveFinite('probeTimeoutMs', this.probeTimeoutMs)
+    // A device node is a host path: a relative or blank entry is a config
+    // error, not a valid node; duplicates would produce redundant binds.
+    const gpuDeviceNodes = [...new Set(config.gpuDeviceNodes as string[])]
+    if (gpuDeviceNodes.some(node => node.trim().length === 0 || !isAbsolute(node))) {
+      throw new Error('sandbox-local: gpuDeviceNodes entries must be non-empty absolute paths')
+    }
+    this.gpuDeviceNodes = gpuDeviceNodes
     // The temp grants are revoked with the provider: a clean server
     // shutdown leaves no temp ACEs behind (workspace ACEs stand by design —
     // the reuse cache; an unclean shutdown leaves them for the next
@@ -316,7 +337,7 @@ export class LocalSandboxProvider extends SandboxProvider {
   confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv {
     if (this.runnerCommand !== undefined) {
       return {
-        argv: [...this.runnerCommand, ...bwrapProfileArgs(policy), '--', ...argv],
+        argv: [...this.runnerCommand, ...bwrapProfileArgs(policy, this.gpuDeviceNodes), '--', ...argv],
         enforcement: 'full',
         denialSignatures: DENIAL_SIGNATURES.runnerCommand,
         runnerFailureRules: [{ fatalSignatures: this.configuredRunnerFailureSignatures }],
@@ -335,7 +356,7 @@ export class LocalSandboxProvider extends SandboxProvider {
   /** The selected rung's runner invocation (program + profile arguments) for one policy. */
   private runnerArgv(runner: SelectedRunner['runner'], policy: SandboxPolicy): string[] {
     switch (runner) {
-      case 'bwrap': return ['bwrap', ...bwrapProfileArgs(policy)]
+      case 'bwrap': return ['bwrap', ...bwrapProfileArgs(policy, this.gpuDeviceNodes)]
       case 'landlock': return [this.landlockLauncher(), ...landlockProfileArgs(policy)]
       case 'seatbelt': return [this.seatbeltExec(), ...seatbeltProfileArgs(policy)]
       case 'windows-acl': return this.windowsAclRunnerArgv(policy)

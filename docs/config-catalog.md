@@ -1488,6 +1488,17 @@ export interface Config {
   runnerFailureSignatures?: string[]
   /** Positive timeout for each functional probe; zero would mean unbounded to Node. */
   probeTimeoutMs?: number
+  /**
+   * Device nodes to bind into confined bwrap profiles (e.g. `/dev/dxg`, the
+   * paravirtualized dxgkrnl GPU device on WSL2 — CUDA/NVML reach the GPU
+   * through it; WSL2 has no `/dev/nvidia*` nodes). Each node is bind-mounted
+   * only when it exists on the host, so one list can serve heterogeneous
+   * hosts (bare-metal `/dev/nvidia*` vs WSL2 `/dev/dxg`). Empty by default:
+   * exposing a GPU to confined commands is a deliberate deployment decision,
+   * not a file effect of either sandbox mode. Entries must be non-empty
+   * absolute paths; duplicates are collapsed.
+   */
+  gpuDeviceNodes?: string[]
 }
 ```
 
