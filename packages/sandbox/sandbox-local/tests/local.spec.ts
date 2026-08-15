@@ -24,6 +24,14 @@ import { bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs } from '../s
 const RO: SandboxPolicy = { mode: 'read-only', workspaceRoot: '/ws' }
 const WW: SandboxPolicy = { mode: 'workspace-write', workspaceRoot: '/ws' }
 
+/** Real host paths to use as fake device nodes; `bwrapProfileArgs` only existence-checks. */
+function fakeDeviceNode(): { exists: string; missing: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-gpu-node-'))
+  const exists = join(dir, 'dxg')
+  writeFileSync(exists, '')
+  return { exists, missing: join(dir, 'absent') }
+}
+
 async function setup(config: Config = {}, internals: LocalSandboxProvider['internals'] = {}) {
   const ctx = new Context()
   await ctx.plugin(LocalSandboxProvider, config)
@@ -62,13 +70,32 @@ function fakeSeatbeltExec(status: number): string {
 const SEATBELT_RO_PROFILE = '(version 1) (allow default) (deny file-write*) (allow file-write* (literal "/dev/null"))'
 
 describe('profile dialects', () => {
-  it('bwrap read-only: whole tree read-only with fresh /dev and /proc, no writable mounts', () => {
-    expect(bwrapProfileArgs(RO)).toEqual(['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent'])
+  it('bwrap read-only: whole tree read-only with fresh /dev and /proc, no writable mounts, no device binds by default', () => {
+    expect(bwrapProfileArgs(RO)).toEqual([
+      '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent',
+    ])
+  })
+
+  it('bwrap read-only: binds each listed device node that exists on the host and skips missing ones', () => {
+    const { exists, missing } = fakeDeviceNode()
+    expect(bwrapProfileArgs(RO, [exists, missing])).toEqual([
+      '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent',
+      '--dev-bind', exists, exists,
+    ])
   })
 
   it('bwrap workspace-write: adds an ephemeral /tmp and rebinds the workspace root', () => {
     expect(bwrapProfileArgs(WW)).toEqual([
       '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent',
+      '--tmpfs', '/tmp', '--bind', '/ws', '/ws',
+    ])
+  })
+
+  it('bwrap workspace-write: device binds come before the writable mounts', () => {
+    const { exists } = fakeDeviceNode()
+    expect(bwrapProfileArgs(WW, [exists])).toEqual([
+      '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent',
+      '--dev-bind', exists, exists,
       '--tmpfs', '/tmp', '--bind', '/ws', '/ws',
     ])
   })
@@ -156,6 +183,70 @@ describe('runnerCommand config', () => {
       )
     },
   )
+})
+
+describe('gpuDeviceNodes config', () => {
+  it('binds configured device nodes into the runnerCommand bwrap profile', async () => {
+    const { exists } = fakeDeviceNode()
+    const { sandbox } = await setup({
+      runnerCommand: ['fake-runner'],
+      runnerFailureSignatures: ['fake-runner: profile rejected'],
+      gpuDeviceNodes: [exists],
+    })
+    const confined = sandbox.confine(['true'], WW)
+    expect(confined.argv).toEqual(['fake-runner', ...bwrapProfileArgs(WW, [exists]), '--', 'true'])
+  })
+
+  it('binds configured device nodes into the platform bwrap rung profile', async () => {
+    const { exists } = fakeDeviceNode()
+    const { sandbox } = await setup({ gpuDeviceNodes: [exists] }, { platform: 'linux', probeBwrap: () => true })
+    const confined = sandbox.confine(['true'], RO)
+    expect(confined.argv).toEqual(['bwrap', ...bwrapProfileArgs(RO, [exists]), '--', 'true'])
+  })
+
+  it('adds no device binds when the list is empty (the default)', async () => {
+    const { sandbox } = await setup({
+      runnerCommand: ['fake-runner'],
+      runnerFailureSignatures: ['fake-runner: profile rejected'],
+    })
+    expect(sandbox.confine(['true'], WW).argv).not.toContain('--dev-bind')
+  })
+
+  it('binds only the nodes that exist on the host', async () => {
+    const { exists, missing } = fakeDeviceNode()
+    const { sandbox } = await setup({
+      runnerCommand: ['fake-runner'],
+      runnerFailureSignatures: ['fake-runner: profile rejected'],
+      gpuDeviceNodes: [exists, missing],
+    })
+    const argv = sandbox.confine(['true'], RO).argv
+    expect(argv).toContain(exists)
+    expect(argv).not.toContain(missing)
+  })
+
+  it('collapses duplicate entries', async () => {
+    const { exists } = fakeDeviceNode()
+    const { sandbox } = await setup({
+      runnerCommand: ['fake-runner'],
+      runnerFailureSignatures: ['fake-runner: profile rejected'],
+      gpuDeviceNodes: [exists, exists],
+    })
+    const argv = sandbox.confine(['true'], RO).argv
+    // One deduplicated pair: `--dev-bind <node> <node>` rather than two.
+    expect(argv.filter(arg => arg === '--dev-bind')).toEqual(['--dev-bind'])
+  })
+
+  it.each(['', '  '])('rejects a blank gpuDeviceNodes entry %j', async (entry) => {
+    await expect(setup({ gpuDeviceNodes: [entry] })).rejects.toThrow(
+      'gpuDeviceNodes entries must be non-empty absolute paths',
+    )
+  })
+
+  it('rejects a relative gpuDeviceNodes entry', async () => {
+    await expect(setup({ gpuDeviceNodes: ['dev/dxg'] })).rejects.toThrow(
+      'gpuDeviceNodes entries must be non-empty absolute paths',
+    )
+  })
 })
 
 describe('the platform chains', () => {

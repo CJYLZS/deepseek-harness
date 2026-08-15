@@ -4,17 +4,27 @@
  * @module @deepseek-ai/dsh-sandbox-local/profiles
  */
 
+import { existsSync } from 'node:fs'
 import { grantArgs as landlockGrantArgs } from '@deepseek-ai/node-addon-landlock-run'
 import { writableRoots } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 
 /**
- * Build the bwrap profile arguments for one file-effect policy.
+ * Build the bwrap profile arguments for one file-effect policy. Each listed
+ * device node (e.g. `/dev/dxg`, the paravirtualized dxgkrnl GPU device on
+ * WSL2 — CUDA/NVML reach the GPU through it; WSL2 has no `/dev/nvidia*`
+ * nodes) is bind-mounted into the fresh `--dev /dev` only when it exists on
+ * the host, so one configured list can serve heterogeneous hosts and
+ * non-GPU hosts are unaffected.
  * @param policy - file-effect policy to express as bwrap mounts.
+ * @param gpuDeviceNodes - device nodes to expose inside the confined profile; empty by default.
  * @returns profile arguments before the trailing separator and command argv.
  */
-export function bwrapProfileArgs(policy: SandboxPolicy): string[] {
+export function bwrapProfileArgs(policy: SandboxPolicy, gpuDeviceNodes: readonly string[] = []): string[] {
   const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent']
+  for (const node of gpuDeviceNodes) {
+    if (existsSync(node)) args.push('--dev-bind', node, node)
+  }
   if (policy.mode === 'workspace-write') {
     args.push('--tmpfs', '/tmp')
     args.push('--bind', policy.workspaceRoot, policy.workspaceRoot)
