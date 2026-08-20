@@ -750,6 +750,19 @@ describe('mapStopReason / mapUsage', () => {
       .toEqual({ kind: 'error', failure: { message: 'pi-ai stream error', code: 'PI_AI_ERROR' } })
   })
 
+  it.each(['pending', 'deferred'] as const)(
+    'refuses the non-terminal stop reason %s instead of reading it as a completion',
+    (stopReason) => {
+      expect(mapStopReason(assistant({ stopReason, content: [{ type: 'text', text: 'ok' }] }))).toEqual({
+        kind: 'error',
+        failure: {
+          message: `pi-ai ended the stream with the non-terminal stop reason "${stopReason}"`,
+          code: 'PI_AI_ERROR',
+        },
+      })
+    },
+  )
+
   it('maps routable HTTP-ish error messages to stable codes', () => {
     expect(mapStopReason(assistant({ stopReason: 'error', errorMessage: 'HTTP 401: bad key' })))
       .toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })

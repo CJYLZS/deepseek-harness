@@ -112,6 +112,17 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
       const text = message.errorMessage ?? 'pi-ai stream error'
       return { kind: 'error', failure: { message: text, code: classifyPiAiError(text) } }
     }
+    // pi-ai extends this union (0.84 added `deferred` for durable response
+    // handles, beside the pre-completion `pending`). Neither is a finished
+    // turn, so reading one as `stop` would report an unfinished response as
+    // success; naming the reason keeps the failure diagnosable.
+    default: return {
+      kind: 'error',
+      failure: {
+        message: `pi-ai ended the stream with the non-terminal stop reason "${message.stopReason}"`,
+        code: 'PI_AI_ERROR',
+      },
+    }
   }
 }
 

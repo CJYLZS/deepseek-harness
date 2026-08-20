@@ -1163,6 +1163,27 @@ export interface PiAiCompatProfile {
    */
   chatTemplateKwargs?: NonNullable<OpenAICompletionsCompat['chatTemplateKwargs']>
   /**
+   * Args sent as `chat_template_args`, which pi-ai reads only under the
+   * `baseten` thinking format; `openai-completions`. The same unchecked
+   * pairing as {@link chatTemplateKwargs} applies.
+   */
+  chatTemplateArgs?: NonNullable<OpenAICompletionsCompat['chatTemplateArgs']>
+  /**
+   * Whether streamed responses carry `finish_reason`; `openai-completions`.
+   * Set `false` for a gateway that omits it, which makes pi-ai infer a normal
+   * or tool-use stop when the stream ends instead of refusing the turn as
+   * truncated. Leaving it unset keeps that refusal, so a real mid-stream
+   * truncation still fails and retries.
+   */
+  supportsFinishReason?: boolean
+  /**
+   * Whether the endpoint accepts top-level `thinking_token_budget` to cap
+   * reasoning tokens (vLLM); `openai-completions`. Reasoning and the answer
+   * share `max_tokens` there, so without a budget a reasoning-heavy turn can
+   * consume the response and emit no answer.
+   */
+  supportsThinkingTokenBudget?: boolean
+  /**
    * Whether the endpoint accepts `strict` in tool definitions;
    * `openai-completions`, the three Responses protocols, `bedrock-converse-stream`.
    */

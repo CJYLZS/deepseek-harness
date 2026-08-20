@@ -636,7 +636,7 @@ describe('per-model reasoning efforts', () => {
   it('narrows a catalog model’s levels in place', () => {
     const [catalogModel] = getBuiltinModels('deepseek')
     if (catalogModel === undefined) throw new Error('the installed catalog ships no deepseek model')
-    expect(getSupportedThinkingLevels(catalogModel as Model<Api>)).toEqual(['off', 'high', 'max'])
+    expect(getSupportedThinkingLevels(catalogModel as Model<Api>)).toEqual(['off', 'low', 'high', 'max'])
 
     const model = modelOf({
       deepseek: { models: [{ id: catalogModel.id, reasoningEfforts: { off: null, high: 'high' } }] },
@@ -777,6 +777,20 @@ describe('compat switches', () => {
 
     expect(models.get('dialect-default')?.compat).toEqual({ thinkingFormat: 'deepseek' })
     expect(models.get('dialect-odd')?.compat).toEqual({ thinkingFormat: 'openai', supportsReasoningEffort: false })
+  })
+
+  it('offers supportsFinishReason for a gateway that omits the streamed field', () => {
+    const models = modelsOf({
+      'acme-gateway': {
+        api: 'openai-completions',
+        baseURL: 'https://acme.test',
+        compat: { supportsFinishReason: false },
+        models: [{ id: 'no-finish-reason' }, { id: 'compliant', compat: { supportsFinishReason: true } }],
+      },
+    }, 'acme-gateway')
+
+    expect((models.get('no-finish-reason')?.compat as OpenAICompletionsCompat).supportsFinishReason).toBe(false)
+    expect((models.get('compliant')?.compat as OpenAICompletionsCompat).supportsFinishReason).toBe(true)
   })
 
   it('merges the switches over the catalog entry’s own compat instead of replacing it', () => {
